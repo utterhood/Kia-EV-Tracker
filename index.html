@@ -78,7 +78,32 @@ const metricReplacement = `
   };
  }
  const historical = key==='retrospective'||key==='registrations';
- card.append(el('span',label),el('strong',unknownEvidence?'N/A':historical?fmt(data.views[key].length):!data.hasLocalCapture&&key!=='master'?'N/A':fmt(data.metrics[key])),el('small',unknownEvidence?'No independent historical evidence collected':note));$('metrics').append(card);`;
+ card.append(el('span',key==='estimate'?'Presumed Sold':label),el('strong',unknownEvidence?'N/A':historical?fmt(data.views[key].length):!data.hasLocalCapture&&key!=='master'?'N/A':fmt(data.metrics[key])),el('small',unknownEvidence?'No independent historical evidence collected':note));$('metrics').append(card);`;
+
+const retainedPresumedSoldEdits = [["const titles={current:", "const presumedSoldLabel='Presumed Sold';\nconst presumedSoldVINs=new Set((data.return_history?.open_episodes||[]).filter(e=>e.last_status==='DS').map(e=>e.vin));\nconst isPresumedSold=r=>!r.current&&presumedSoldVINs.has(r.vin);\nconst displayStatus=r=>r.current?status(r.status):isPresumedSold(r)?presumedSoldLabel:'Absent / Dropped';\nconst filterValue=(r,key)=>key==='saleEstimate'?(isPresumedSold(r)?presumedSoldLabel:''):(r[key]||'');\nconst filterChoices=key=>key==='saleEstimate'?[presumedSoldLabel]:[...new Set(data.rows.map(r=>filterValue(r,key)))].sort();\nconst titles={presumed_sold:'Presumed Sold',current:"], ["status:'Inventory status'};", "status:'Inventory status',saleEstimate:'Sale estimate'};"], ["for(const value of [...new Set(data.rows.map(r=>r[key]||''))].sort())", "for(const value of filterChoices(key))"], ["view==='master'?true:view==='favorites'", "view==='master'?true:view==='presumed_sold'?isPresumedSold(r):view==='favorites'"], ["!s.size||s.has(r[k]||'')", "!s.size||s.has(filterValue(r,k))"], ["status(r.status)].join(' ').toLowerCase().includes(w)", "status(r.status),displayStatus(r)].join(' ').toLowerCase().includes(w)"], ["el('span',r.current?status(r.status):'Absent / Dropped','badge ", "el('span',displayStatus(r),'badge "], [" ['master',data.rows.length,'Master VIN total','All observed 2026 VINs'],", " ['presumed_sold',data.rows.filter(isPresumedSold).length,presumedSoldLabel,'Estimate; not confirmed retail sales'],\n ['master',data.rows.length,'Master VIN total','All observed 2026 VINs'],"]];
+function retainedPresumedSold(html) {
+ if (html.includes("const presumedSoldLabel='Presumed Sold';")) return html;
+ let candidate=html;
+ for (const [before,after] of retainedPresumedSoldEdits) {
+  const start=candidate.indexOf(before);
+  if(start<0 || candidate.indexOf(before,start+before.length)>=0) return html;
+  candidate=candidate.slice(0,start)+after+candidate.slice(start+before.length);
+ }
+ return candidate;
+}
+const addPresumedFilter = `
+ const toggle = $('presumed-sold-filter'), available = data.hasLocalCapture && data.metrics.estimate!=null;
+ if(toggle) {
+  toggle.hidden=!available;
+  toggle.setAttribute('aria-pressed',String(scope==='presumed'));
+  toggle.onclick=()=>{
+   closeFilter();
+   if(scope==='presumed'){scope='all';}else{view='master';scope='presumed';}
+   detailVin=null;detailReturnTarget=null;page=0;render();
+  };
+ }
+`;
+
 const renderLine = 'function render(){';
 const renderReplacement = `function activeSummaryMetric(){
  if(scope==='presumed')return view==='master'?'estimate':null;
@@ -99,6 +124,7 @@ function syncSummaryCards(){
 }
 function render(){
  syncSummaryCards();
+ ${addPresumedFilter}
 `;
 const metricLoop = "for(const [key,label,note] of [['current'";
 const historicalMetrics = ",['retrospective','Retrospective inferred sales','Historical estimates; not confirmed sales'],['registrations','Registration evidence','Independent registration evidence records']";
@@ -126,7 +152,7 @@ function show(key, section = '') {
   year.value = String(profile.year);
   frame.title = profile.model + ' ' + profile.year + ' inventory';
   nextSection = section;
-  const html = profile.html;
+  const html = key==='ev6-2026' ? retainedPresumedSold(profile.html) : profile.html;
   const metricStart = html.indexOf(metricLoop);
   const metricAt = html.indexOf(metricLine, metricStart);
   const metricEnd = html.lastIndexOf(']){', metricAt);
@@ -137,6 +163,7 @@ function show(key, section = '') {
       .replace(renderLine, () => renderReplacement)
       .replace(viewLoop, 'for(const [key,title] of []){')
       // Keep the expected ID for layout and render internals, but hide the empty nav.
+      .replace('<button id="clear-scope" hidden>', '<button id="presumed-sold-filter" type="button" aria-pressed="false" hidden title="Estimated dealer-stock disappearances, not confirmed sales">Presumed Sold</button><button id="clear-scope" hidden>')
       .replace(viewNav, '<nav id="views" aria-label="Inventory views" hidden></nav>')
       .replace('</head>', metricCss + '</head>')
     : html;
